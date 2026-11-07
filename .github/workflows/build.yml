@@ -19,7 +19,10 @@ jobs:
         with:
           gradle-version: '8.11.1'
       - name: Install Android SDK
-        run: sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+        run: |
+          SDKMANAGER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -type f -path '*/bin/sdkmanager' | head -n 1)
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0'
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
       - uses: actions/upload-artifact@v4
