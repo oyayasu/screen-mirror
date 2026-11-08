@@ -35,7 +35,15 @@ jobs:
           test "$(wc -c < app/src/main/assets/hls.min.js)" -gt 100000
           node --check app/src/main/assets/player.js
           node --check app/src/main/assets/hls.min.js
-          command -v ffmpeg && command -v ffprobe
+
+      - name: Preparar ferramentas para validar os segmentos HLS
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
       - name: Build debug APK
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
       - uses: actions/upload-artifact@v4
