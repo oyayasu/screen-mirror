@@ -13,6 +13,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.content.res.ColorStateList
+import android.graphics.drawable.RippleDrawable
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.nsd.NsdManager
@@ -27,6 +29,8 @@ import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -44,9 +48,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Versão 0.1: descoberta de TVs, NÃO um transmissor Miracast.
- * Os resultados diferenciam descoberta e conectividade; abrir o painel Cast
- * não estabelece automaticamente a conexão com a TV.
+ * Interface v0.4. Descoberta de rede e transmissão HLS continuam em serviços independentes.
+ * Encontrar uma TV não significa que o dispositivo aceite Miracast.
  */
 class MainActivity : Activity() {
     private data class Device(
@@ -57,11 +60,13 @@ class MainActivity : Activity() {
         val details: String
     )
 
-    private val background = Color.rgb(248, 250, 252)
-    private val ink = Color.rgb(29, 41, 57)
-    private val secondary = Color.rgb(105, 117, 133)
-    private val blue = Color.rgb(52, 91, 161)
-    private val border = Color.rgb(226, 232, 239)
+    private val background = Color.rgb(247, 247, 251)
+    private val ink = Color.rgb(32, 32, 47)
+    private val secondary = Color.rgb(119, 122, 140)
+    private val accent = Color.rgb(117, 110, 189)
+    private val accentSoft = Color.rgb(243, 241, 253)
+    private val border = Color.rgb(233, 233, 242)
+    private val white = Color.WHITE
     private val mainHandler = Handler(Looper.getMainLooper())
     private val jobs = Executors.newFixedThreadPool(18)
     private val scanId = AtomicInteger(0)
@@ -73,6 +78,9 @@ class MainActivity : Activity() {
 
     private lateinit var status: TextView
     private lateinit var mirrorStatus: TextView
+    private lateinit var streamBadge: TextView
+    private lateinit var shareActions: LinearLayout
+    private lateinit var streamAction: TextView
     private var audioPermissionRequested = false
     private val mirrorStatusUpdater = object : Runnable {
         override fun run() {
@@ -122,139 +130,223 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this).apply {
             setBackgroundColor(this@MainActivity.background)
             isFillViewport = true
-            clipToPadding = false
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
         }
-        val column = LinearLayout(this).apply {
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(28), dp(22), dp(32))
+            setPadding(dp(20), dp(26), dp(20), dp(40))
         }
-        scroll.addView(column, ViewGroup.LayoutParams(-1, -2))
+        val contentWidth = minOf(resources.displayMetrics.widthPixels - dp(12), dp(680))
+        scroll.addView(content, FrameLayout.LayoutParams(
+            contentWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        ))
         setContentView(scroll)
 
-        column.addView(text("Espelho", 32f, ink, true))
-        column.addView(text("Descubra dispositivos próximos", 15f, secondary).apply {
-            setPadding(0, dp(4), 0, dp(24))
-        })
-
-        val hero = panel()
-        hero.addView(text("Buscar TVs", 20f, ink, true))
-        hero.addView(text("Procura equipamentos na rede e pelo Wi-Fi Direct. A descoberta não garante que o espelhamento seja aceito.", 14f, secondary).apply {
-            setPadding(0, dp(8), 0, dp(16))
-        })
-        hero.addView(button("Procurar dispositivos", true) { startSearch() })
-        hero.addView(button("Procurar IPs da rede", false) { scanLocalNetwork() }.apply {
-            val lp = LinearLayout.LayoutParams(-1, dp(48)); lp.topMargin = dp(8); layoutParams = lp
-        })
-        status = text("Pronto para procurar", 13f, secondary).apply {
-            setPadding(0, dp(14), 0, 0)
+        // Cabeçalho com o ícone vetorial original do Espelho.
+        val heading = horizontal()
+        val logo = ImageView(this).apply {
+            setImageResource(R.drawable.app_icon)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "Espelho"
         }
-        hero.addView(status)
-        column.addView(hero)
-
-        val listHeader = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(26), 0, dp(12))
+        heading.addView(logo, LinearLayout.LayoutParams(dp(57), dp(57)))
+        val nameBlock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(13), 0, 0, 0)
         }
-        listHeader.addView(text("Dispositivos", 19f, ink, true), LinearLayout.LayoutParams(0, -2, 1f))
+        nameBlock.addView(text("Espelho", 29f, ink, true))
+        nameBlock.addView(text("Transmissão de tela", 13f, secondary))
+        heading.addView(nameBlock, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val version = text("v0.4", 12f, accent, true).apply {
+            gravity = Gravity.CENTER
+            background = shape(accentSoft, null, 14f)
+            setPadding(dp(10), dp(7), dp(10), dp(7))
+        }
+        heading.addView(version)
+        content.addView(heading)
+        content.addView(space(25))
+
+        // Card principal: ênfase na tarefa de espelhamento, não em detalhes técnicos.
+        val share = panel()
+        val shareHeader = horizontal()
+        shareHeader.addView(iconTile(R.drawable.ic_transmit), LinearLayout.LayoutParams(dp(52), dp(52)))
+        val shareTitle = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(13), dp(1), 0, 0)
+        }
+        shareTitle.addView(text("Compartilhar tela", 21f, ink, true))
+        shareTitle.addView(text("Vídeo e áudio pela rede local", 13f, secondary).apply {
+            setPadding(0, dp(4), 0, 0)
+        })
+        shareHeader.addView(shareTitle)
+        share.addView(shareHeader)
+        share.addView(space(17))
+        streamAction = button("Iniciar transmissão", true) { startBrowserMirroring() }
+        share.addView(streamAction, LinearLayout.LayoutParams(-1, dp(54)))
+        val streamBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = shape(accentSoft, null, 18f)
+            setPadding(dp(15), dp(14), dp(15), dp(14))
+        }
+        streamBadge = text("Pronto para transmitir", 12f, accent, true)
+        streamBox.addView(streamBadge)
+        mirrorStatus = text("Nenhuma transmissão ativa.", 13f, secondary).apply {
+            setPadding(0, dp(6), 0, 0)
+            setTextIsSelectable(true)
+        }
+        streamBox.addView(mirrorStatus)
+        shareActions = horizontal().apply {
+            val params = LinearLayout.LayoutParams(-1, -2)
+            params.topMargin = dp(12)
+            layoutParams = params
+            visibility = View.GONE
+        }
+        shareActions.addView(button("Copiar link", false) { copyMirrorAddress() },
+            LinearLayout.LayoutParams(0, dp(44), 1f))
+        val stopParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(9) }
+        shareActions.addView(button("Encerrar", false) { stopBrowserMirroring() }, stopParams)
+        streamBox.addView(shareActions)
+        val streamParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(15) }
+        share.addView(streamBox, streamParams)
+        content.addView(share)
+        content.addView(space(27))
+
+        // Busca: a lista nunca implica que a TV já foi conectada.
+        val discoveryHeading = horizontal()
+        discoveryHeading.addView(text("Dispositivos", 21f, ink, true),
+            LinearLayout.LayoutParams(0, -2, 1f))
         counter = text("0 encontrados", 12f, secondary)
-        listHeader.addView(counter)
-        column.addView(listHeader)
+        discoveryHeading.addView(counter)
+        content.addView(discoveryHeading)
+        content.addView(space(11))
+
+        val searchPanel = panel()
+        val searchHeader = horizontal()
+        searchHeader.addView(iconTile(R.drawable.ic_search_devices), LinearLayout.LayoutParams(dp(43), dp(43)))
+        searchHeader.addView(text("Encontrar TVs na rede", 15f, ink, true).apply {
+            setPadding(dp(12), 0, 0, 0)
+        })
+        searchPanel.addView(searchHeader)
+        val searchButtons = horizontal()
+        searchButtons.addView(button("Buscar TVs", false) { startSearch() },
+            LinearLayout.LayoutParams(0, dp(48), 1f))
+        searchButtons.addView(button("Buscar IPs", false) { scanLocalNetwork() },
+            LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(9) })
+        searchPanel.addView(searchButtons, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
+        status = text("Pronto para procurar.", 12f, secondary).apply {
+            setPadding(0, dp(11), 0, 0)
+        }
+        searchPanel.addView(status)
+        content.addView(searchPanel)
+        content.addView(space(10))
+
         deviceList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        column.addView(deviceList)
+        content.addView(deviceList)
         updateList()
 
-        val manual = panel().apply {
-            val lp = LinearLayout.LayoutParams(-1, -2); lp.topMargin = dp(24); layoutParams = lp
-        }
-        manual.addView(text("Adicionar por IP", 18f, ink, true))
-        manual.addView(text("Útil quando a Samsung não responde à descoberta automática.", 13f, secondary).apply {
-            setPadding(0, dp(6), 0, dp(10))
+        val manual = panel()
+        manual.addView(text("Adicionar por IP", 16f, ink, true))
+        manual.addView(text("Use o endereço da TV se ela não aparecer na busca.", 12f, secondary).apply {
+            setPadding(0, dp(5), 0, dp(12))
         })
         ipField = EditText(this).apply {
-            hint = "Ex.: 192.168.1.50"
+            hint = "192.168.1.50"
             setSingleLine(true)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             textSize = 15f
             setTextColor(ink)
             setHintTextColor(secondary)
-            background = shape(Color.WHITE, border, 12f)
-            setPadding(dp(12), 0, dp(12), 0)
+            background = shape(Color.rgb(249, 249, 253), border, 15f)
+            setPadding(dp(15), 0, dp(15), 0)
         }
-        manual.addView(ipField, LinearLayout.LayoutParams(-1, dp(48)))
-        manual.addView(button("Verificar endereço", false) { verifyIp() }.apply {
-            val lp = LinearLayout.LayoutParams(-1, dp(48)); lp.topMargin = dp(10); layoutParams = lp
-        })
-        column.addView(manual)
-
-        val connection = panel().apply {
-            val lp = LinearLayout.LayoutParams(-1, -2); lp.topMargin = dp(18); layoutParams = lp
-        }
-        connection.addView(text("Vídeo e áudio pela rede local", 18f, ink, true))
-        connection.addView(text("Transmissão experimental H.264 + AAC (HLS), sem limite artificial de 4 FPS. A TV deve abrir o endereço informado no navegador. O desempenho e o áudio dependem do tablet, da rede e da compatibilidade da TV.", 13f, secondary).apply {
-            setPadding(0, dp(6), 0, dp(12))
-        })
-        connection.addView(button("Iniciar transmissão da tela", true) { startBrowserMirroring() })
-        mirrorStatus = text("Nenhuma transmissão ativa.", 14f, secondary).apply {
-            setPadding(0, dp(12), 0, dp(8))
-        }
-        connection.addView(mirrorStatus)
-        connection.addView(button("Copiar endereço", false) { copyMirrorAddress() }.apply {
-            val lp = LinearLayout.LayoutParams(-1, dp(46)); lp.topMargin = dp(6); layoutParams = lp
-        })
-        connection.addView(button("Parar transmissão", false) { stopBrowserMirroring() }.apply {
-            val lp = LinearLayout.LayoutParams(-1, dp(46)); lp.topMargin = dp(6); layoutParams = lp
-        })
-        column.addView(connection)
-
-        column.addView(text("Versão 0.3 • sem anúncios • vídeo H.264 + áudio AAC (HLS)", 12f, secondary).apply {
+        manual.addView(ipField, LinearLayout.LayoutParams(-1, dp(50)))
+        val verify = button("Verificar endereço", false) { verifyIp() }
+        manual.addView(verify, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
+        content.addView(manual)
+        content.addView(text("Espelho 0.4  ·  Sem anúncios", 12f, secondary).apply {
             gravity = Gravity.CENTER
             setPadding(0, dp(24), 0, 0)
         })
+        updateMirrorStatus()
+    }
+
+    private fun horizontal() = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+    }
+
+    private fun space(height: Int) = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(1, dp(height))
+    }
+
+    private fun iconTile(icon: Int): FrameLayout = FrameLayout(this).apply {
+        background = shape(accentSoft, null, 16f)
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(icon)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }, FrameLayout.LayoutParams(dp(25), dp(25), Gravity.CENTER))
     }
 
     private fun panel(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        background = shape(Color.WHITE, border, 18f)
-        setPadding(dp(18), dp(18), dp(18), dp(18))
+        background = shape(white, border, 25f)
+        setPadding(dp(19), dp(20), dp(19), dp(20))
+        elevation = dp(1).toFloat()
     }
 
-    private fun text(s: String, size: Float, color: Int, bold: Boolean = false): TextView = TextView(this).apply {
-        text = s
-        textSize = size
-        setTextColor(color)
-        if (bold) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-    }
+    private fun text(s: String, size: Float, color: Int, bold: Boolean = false): TextView =
+        TextView(this).apply {
+            text = s
+            textSize = size
+            setTextColor(color)
+            typeface = Typeface.create(
+                if (bold) "sans-serif-medium" else "sans-serif",
+                Typeface.NORMAL
+            )
+            if (size >= 20f) letterSpacing = -0.018f
+        }
 
-    private fun button(label: String, primary: Boolean, click: () -> Unit): Button = Button(this).apply {
-        text = label
-        textSize = 14f
-        isAllCaps = false
-        setTextColor(if (primary) Color.WHITE else blue)
-        background = shape(if (primary) blue else Color.rgb(239, 244, 251), null, 12f)
-        setPadding(dp(10), 0, dp(10), 0)
-        elevation = 0f
-        setOnClickListener { click() }
-        if (layoutParams == null) layoutParams = LinearLayout.LayoutParams(-1, dp(48))
-    }
+    private fun button(label: String, primary: Boolean, click: () -> Unit): TextView =
+        TextView(this).apply {
+            text = label
+            textSize = 14f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setTextColor(if (primary) white else accent)
+            gravity = Gravity.CENTER
+            setPadding(dp(13), 0, dp(13), 0)
+            background = RippleDrawable(
+                ColorStateList.valueOf(if (primary) Color.rgb(217, 211, 255) else Color.rgb(222, 218, 249)),
+                shape(if (primary) accent else accentSoft, null, 16f),
+                null
+            )
+            isClickable = true
+            isFocusable = true
+            contentDescription = label
+            setOnClickListener { click() }
+            if (layoutParams == null) layoutParams = LinearLayout.LayoutParams(-1, dp(48))
+        }
 
-    private fun shape(fill: Int, stroke: Int?, radiusDp: Float): GradientDrawable = GradientDrawable().apply {
-        setColor(fill)
-        cornerRadius = dp(radiusDp.toInt()).toFloat()
-        if (stroke != null) setStroke(dp(1), stroke)
-    }
+    private fun shape(fill: Int, stroke: Int?, radiusDp: Float): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(fill)
+            cornerRadius = dp(radiusDp.toInt()).toFloat()
+            if (stroke != null) setStroke(dp(1), stroke)
+        }
 
     private fun dp(px: Int): Int = (px * resources.displayMetrics.density + 0.5f).toInt()
 
     private fun setStatus(message: String) = runOnUiThread { status.text = message }
 
     private fun addDevice(device: Device) = runOnUiThread {
-        // Evite duplicados no mesmo IP quando encontrados por SSDP, NSD e busca TCP.
-        val existing = if (device.address != null) devices.values.firstOrNull { it.address == device.address } else null
+        val existing = if (device.address != null)
+            devices.values.firstOrNull { it.address == device.address } else null
         if (existing != null) {
-            val merged = Device(existing.key,
+            val merged = Device(
+                existing.key,
                 if (device.name.contains("Samsung", ignoreCase = true)) device.name else existing.name,
-                existing.address, "${existing.channel} · ${device.channel}", existing.details)
+                existing.address, existing.channel + " · " + device.channel, existing.details
+            )
             devices[existing.key] = merged
         } else {
             devices[device.key] = device
@@ -264,37 +356,62 @@ class MainActivity : Activity() {
 
     private fun updateList() {
         deviceList.removeAllViews()
-        counter.text = "${devices.size} encontrados"
+        counter.text = devices.size.toString() + " encontrados"
         if (devices.isEmpty()) {
-            deviceList.addView(text("Nenhum dispositivo encontrado ainda.", 14f, secondary).apply {
-                setPadding(dp(8), dp(16), 0, dp(18))
+            val empty = panel().apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                setPadding(dp(18), dp(20), dp(18), dp(20))
+            }
+            empty.addView(iconTile(R.drawable.ic_television),
+                LinearLayout.LayoutParams(dp(52), dp(52)))
+            empty.addView(text("Nenhuma TV encontrada", 15f, ink, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(11), 0, 0)
+            })
+            empty.addView(text("Toque em Buscar TVs para começar.", 12f, secondary).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(4), 0, 0)
+            })
+            deviceList.addView(empty, LinearLayout.LayoutParams(-1, -2).apply {
+                bottomMargin = dp(11)
             })
             return
         }
         devices.values.forEach { device ->
-            val card = panel().apply {
-                val lp = LinearLayout.LayoutParams(-1, -2)
-                lp.bottomMargin = dp(10)
-                layoutParams = lp
+            val card = panel()
+            val row = horizontal()
+            row.addView(iconTile(R.drawable.ic_television),
+                LinearLayout.LayoutParams(dp(44), dp(44)))
+            val info = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), 0, 0, 0)
             }
-            card.addView(text(device.name, 16f, ink, true))
-            card.addView(text(listOfNotNull(device.address, device.channel).joinToString(" · "), 12f, secondary).apply {
-                setPadding(0, dp(5), 0, 0)
+            info.addView(text(device.name, 16f, ink, true).apply {
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
             })
+            info.addView(text(
+                listOfNotNull(device.address, device.channel).joinToString(" · "),
+                12f, secondary
+            ).apply { setPadding(0, dp(5), 0, 0) })
+            row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
+            card.addView(row)
             card.addView(text(device.details, 12f, secondary).apply {
-                setPadding(0, dp(6), 0, dp(10))
+                setPadding(0, dp(11), 0, dp(13))
             })
-            val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            val saved = isFavorite(device)
-            actions.addView(button(if (saved) "Remover favorito" else "Favorito", false) {
+            val actions = horizontal()
+            actions.addView(button(if (isFavorite(device)) "Salvo" else "Salvar", false) {
                 toggleFavorite(device)
-            }, LinearLayout.LayoutParams(0, dp(44), 1f))
-            val connect = button("Opções de conexão", true) { showConnectionOptions(device) }
-            val connectParams = LinearLayout.LayoutParams(0, dp(44), 1.2f)
-            connectParams.marginStart = dp(8)
-            actions.addView(connect, connectParams)
+            }, LinearLayout.LayoutParams(0, dp(43), 0.95f))
+            actions.addView(button("Opções de conexão", false) {
+                showConnectionOptions(device)
+            }, LinearLayout.LayoutParams(0, dp(43), 1.4f).apply {
+                marginStart = dp(9)
+            })
             card.addView(actions)
-            deviceList.addView(card)
+            deviceList.addView(card, LinearLayout.LayoutParams(-1, -2).apply {
+                bottomMargin = dp(10)
+            })
         }
     }
 
@@ -663,12 +780,23 @@ class MainActivity : Activity() {
     private fun updateMirrorStatus() {
         val url = BrowserMirrorService.currentUrl
         val error = BrowserMirrorService.lastError
-        mirrorStatus.text = when {
-            url != null -> "Abra no navegador da TV:\n" + url + "\n\n" + BrowserMirrorService.streamStatus +
-                "\n\nA reprodução pode demorar alguns segundos. O áudio de apps protegidos não pode ser capturado."
-            error != null -> "Falha: " + error
-            else -> "Nenhuma transmissão ativa."
+        streamBadge.text = when {
+            url != null -> "Transmissão ativa"
+            error != null -> "Não foi possível transmitir"
+            else -> "Pronto para transmitir"
         }
+        streamBadge.setTextColor(if (error != null && url == null) Color.rgb(179, 73, 74) else accent)
+        mirrorStatus.text = when {
+            url != null ->
+                "No navegador da TV, abra:\n" + url + "\n\n" +
+                    BrowserMirrorService.streamStatus +
+                    "\n\nA reprodução depende da compatibilidade da TV."
+            error != null -> "Falha: " + error
+            else -> "Aguardando início da transmissão."
+        }
+        shareActions.visibility = if (url != null) View.VISIBLE else View.GONE
+        streamAction.isEnabled = url == null
+        streamAction.alpha = if (url == null) 1f else 0.55f
     }
 
     override fun onResume() {
