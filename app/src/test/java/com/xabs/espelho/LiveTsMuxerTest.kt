@@ -57,7 +57,7 @@ class LiveTsMuxerTest {
         mux.addVideo(frame, 6_000_000L, true)
         val live = mux.playlist("/750795")
         assertTrue(live.contains("#EXT-X-DISCONTINUITY-SEQUENCE:0"))
-        assertTrue(live.contains("#EXT-X-DISCONTINUITY\\n"))
+        assertTrue(live.contains("#EXT-X-DISCONTINUITY\n"))
         assertTrue(live.contains("/750795/segment-2.ts"))
         assertFalse(live.contains("#EXT-X-ENDLIST"))
         assertEquals(2, mux.latestSegmentId())
@@ -73,6 +73,6 @@ class LiveTsMuxerTest {
         for (i in 2..13) mux.addVideo(frame, i.toLong() * 2_000_000L, true)
         val playlist = mux.playlist("/750795")
         assertTrue(playlist.contains("#EXT-X-DISCONTINUITY-SEQUENCE:1"))
-        assertFalse(playlist.contains("#EXT-X-DISCONTINUITY\\n"))
+        assertFalse(playlist.contains("#EXT-X-DISCONTINUITY\n"))
     }
 }
