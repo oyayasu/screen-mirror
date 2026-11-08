@@ -81,6 +81,8 @@ class MainActivity : Activity() {
     private lateinit var shareActions: LinearLayout
     private lateinit var streamAction: TextView
     private var audioPermissionRequested = false
+    private var captureRequestPending = false
+    private var captureNotice = "O Android pedirá autorização antes de capturar a tela."
     private val mirrorStatusUpdater = object : Runnable {
         override fun run() {
             if (::mirrorStatus.isInitialized) updateMirrorStatus()
@@ -722,18 +724,59 @@ class MainActivity : Activity() {
     }
 
     private fun startBrowserMirroring() {
-        if (android.os.Build.VERSION.SDK_INT >= 29 && !audioPermissionRequested &&
+        if (captureRequestPending) return
+        if (BrowserMirrorService.currentUrl != null) {
+            captureNotice = "Encerrando a sessão anterior para pedir nova autorização…"
+            stopBrowserMirroring()
+            awaitOldCaptureShutdown(0)
+            return
+        }
+        requestFreshCapture()
+    }
+
+    private fun awaitOldCaptureShutdown(attempt: Int) {
+        if (BrowserMirrorService.currentUrl == null) {
+            mainHandler.postDelayed({ requestFreshCapture() }, 350L)
+        } else if (attempt < 20) {
+            mainHandler.postDelayed({ awaitOldCaptureShutdown(attempt + 1) }, 250L)
+        } else {
+            captureNotice = "Não foi possível encerrar a captura anterior. Toque em Encerrar e tente novamente."
+            setStatus(captureNotice)
+        }
+    }
+
+    private fun requestFreshCapture() {
+        if (captureRequestPending) return
+        if (Build.VERSION.SDK_INT >= 29 && !audioPermissionRequested &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             audioPermissionRequested = true
+            captureNotice = "Autorize o áudio; em seguida o Android pedirá permissão para capturar a tela."
+            setStatus(captureNotice)
+            updateMirrorStatus()
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 6403)
             return
         }
         try {
             val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            // Pede uma nova autorização a cada sessão. Android 14+ permite selecionar tela inteira.
+            val request = if (Build.VERSION.SDK_INT >= 34) {
+                manager.createScreenCaptureIntent(
+                    android.media.projection.MediaProjectionConfig.createConfigForDefaultDisplay()
+                )
+            } else {
+                manager.createScreenCaptureIntent()
+            }
+            captureRequestPending = true
+            captureNotice = "Aguardando autorização do Android para compartilhar a tela inteira…"
+            setStatus(captureNotice)
+            updateMirrorStatus()
             @Suppress("DEPRECATION")
-            startActivityForResult(manager.createScreenCaptureIntent(), 6402)
-        } catch (_: Exception) {
-            setStatus("O tablet não disponibilizou a permissão para captura da tela.")
+            startActivityForResult(request, 6402)
+        } catch (e: Exception) {
+            captureRequestPending = false
+            captureNotice = "Não consegui abrir a permissão de tela: " + (e.message ?: "erro desconhecido")
+            setStatus(captureNotice)
+            updateMirrorStatus()
         }
     }
 
@@ -741,8 +784,11 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != 6402) return
+        captureRequestPending = false
         if (resultCode != RESULT_OK || data == null) {
-            setStatus("Transmissão cancelada.")
+            captureNotice = "Permissão de tela não concedida. Nenhuma imagem está sendo capturada."
+            setStatus(captureNotice)
+            updateMirrorStatus()
             return
         }
         try {
@@ -751,10 +797,14 @@ class MainActivity : Activity() {
                 putExtra(BrowserMirrorService.EXTRA_PERMISSION_DATA, data)
                 putExtra(BrowserMirrorService.EXTRA_RESULT_CODE, resultCode)
             }
+            captureNotice = "Permissão concedida. Inicializando captura e codificador…"
             startForegroundService(service)
-            setStatus("Iniciando transmissão local…")
-        } catch (_: Exception) {
-            setStatus("Não foi possível iniciar o serviço de transmissão.")
+            setStatus(captureNotice)
+            updateMirrorStatus()
+        } catch (e: Exception) {
+            captureNotice = "Falha ao iniciar o serviço: " + (e.message ?: "erro desconhecido")
+            setStatus(captureNotice)
+            updateMirrorStatus()
         }
     }
 
@@ -779,23 +829,46 @@ class MainActivity : Activity() {
     private fun updateMirrorStatus() {
         val url = BrowserMirrorService.currentUrl
         val error = BrowserMirrorService.lastError
+        val frames = BrowserMirrorService.encodedFrames
+        val segments = BrowserMirrorService.completedSegments
+        val consent = BrowserMirrorService.captureAuthorized
+        val lastFrame = BrowserMirrorService.lastVideoFrameElapsedMs
+        val stalled = lastFrame > 0 &&
+            android.os.SystemClock.elapsedRealtime() - lastFrame > 12000L
         streamBadge.text = when {
-            url != null -> "Transmissão ativa"
-            error != null -> "Não foi possível transmitir"
-            else -> "Pronto para transmitir"
+            captureRequestPending -> "Aguardando autorização do Android"
+            url != null && !consent -> "Servidor aberto, captura não confirmada"
+            url != null && frames == 0L -> "Aguardando primeiros quadros"
+            url != null && stalled -> "Vídeo sem novos quadros"
+            url != null && segments == 0 -> "Codificando; preparando vídeo ao vivo"
+            url != null -> "Vídeo capturado · " + frames + " quadros"
+            error != null -> "Falha na transmissão"
+            else -> "Pronto para compartilhar"
         }
-        streamBadge.setTextColor(if (error != null && url == null) Color.rgb(179, 73, 74) else accent)
+        streamBadge.setTextColor(
+            if (error != null && url == null || stalled) Color.rgb(179, 73, 74) else accent
+        )
         mirrorStatus.text = when {
-            url != null ->
-                "No navegador da TV, abra:\n" + url + "\n\n" +
-                    BrowserMirrorService.streamStatus +
-                    "\n\nA reprodução depende da compatibilidade da TV."
-            error != null -> "Falha: " + error
-            else -> "Aguardando início da transmissão."
+            url != null -> "No navegador da TV, abra:\n" + url + "\n\n" +
+                "Autorização de tela: " + if (consent) "concedida" else "não confirmada" +
+                "\nQuadros de vídeo: " + frames + " · Segmentos HLS: " + segments +
+                "\n" + BrowserMirrorService.streamStatus + "\n" +
+                BrowserMirrorService.capturePhase +
+                if (frames == 0L) "\n\nSe continuar em zero, reinicie a captura e autorize a tela inteira."
+                else if (stalled) "\n\nNenhum quadro novo há mais de 12 segundos. Reinicie a captura."
+                else "\n\nO link só compartilha imagens se a captura estiver produzindo quadros."
+            captureRequestPending -> captureNotice
+            error != null -> "Erro: " + error + "\n" + captureNotice
+            else -> captureNotice
         }
         shareActions.visibility = if (url != null) View.VISIBLE else View.GONE
-        streamAction.isEnabled = url == null
-        streamAction.alpha = if (url == null) 1f else 0.55f
+        streamAction.text = when {
+            captureRequestPending -> "Aguardando autorização…"
+            url != null -> "Reiniciar captura"
+            else -> "Iniciar transmissão"
+        }
+        streamAction.isEnabled = !captureRequestPending
+        streamAction.alpha = if (captureRequestPending) 0.55f else 1f
     }
 
     override fun onResume() {
