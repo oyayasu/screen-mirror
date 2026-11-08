@@ -3,6 +3,8 @@ package com.xabs.espelho
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.Manifest
+import android.content.pm.PackageManager
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -73,6 +75,7 @@ class MainActivity : Activity() {
 
     private lateinit var status: TextView
     private lateinit var mirrorStatus: TextView
+    private var audioPermissionRequested = false
     private val mirrorStatusUpdater = object : Runnable {
         override fun run() {
             if (::mirrorStatus.isInitialized) updateMirrorStatus()
@@ -189,8 +192,8 @@ class MainActivity : Activity() {
         val connection = panel().apply {
             val lp = LinearLayout.LayoutParams(-1, -2); lp.topMargin = dp(18); layoutParams = lp
         }
-        connection.addView(text("Espelhamento pelo navegador da TV", 18f, ink, true))
-        connection.addView(text("Alternativa experimental para TVs com navegador. Sem Miracast, sem áudio e com atualização limitada. A TV precisará abrir o endereço informado.", 13f, secondary).apply {
+        connection.addView(text("Vídeo e áudio pela rede local", 18f, ink, true))
+        connection.addView(text("Transmissão experimental H.264 + AAC (HLS), sem limite artificial de 4 FPS. A TV deve abrir o endereço informado no navegador. O desempenho e o áudio dependem do tablet, da rede e da compatibilidade da TV.", 13f, secondary).apply {
             setPadding(0, dp(6), 0, dp(12))
         })
         connection.addView(button("Iniciar transmissão da tela", true) { startBrowserMirroring() })
@@ -206,7 +209,7 @@ class MainActivity : Activity() {
         })
         column.addView(connection)
 
-        column.addView(text("Versão 0.2 • sem anúncios • descoberta + transmissão LAN experimental", 12f, secondary).apply {
+        column.addView(text("Versão 0.3 • sem anúncios • vídeo H.264 + áudio AAC (HLS)", 12f, secondary).apply {
             gravity = Gravity.CENTER
             setPadding(0, dp(24), 0, 0)
         })
@@ -599,12 +602,28 @@ class MainActivity : Activity() {
     }
 
     private fun startBrowserMirroring() {
+        if (android.os.Build.VERSION.SDK_INT >= 29 && !audioPermissionRequested &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            audioPermissionRequested = true
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 6403)
+            return
+        }
         try {
             val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             @Suppress("DEPRECATION")
             startActivityForResult(manager.createScreenCaptureIntent(), 6402)
         } catch (_: Exception) {
             setStatus("O tablet não disponibilizou a permissão para captura da tela.")
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 6403) {
+            if (grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
+                setStatus("Permissão de áudio negada. Só o vídeo poderá ser transmitido.")
+            }
+            startBrowserMirroring()
         }
     }
 
@@ -651,8 +670,8 @@ class MainActivity : Activity() {
         val url = BrowserMirrorService.currentUrl
         val error = BrowserMirrorService.lastError
         mirrorStatus.text = when {
-            url != null -> "No navegador da TV, abra:\n" + url +
-                "\n\nA TV e o tablet devem estar na mesma rede. Compartilhe apenas em uma rede confiável."
+            url != null -> "Abra no navegador da TV:\n" + url + "\n\n" + BrowserMirrorService.streamStatus +
+                "\n\nA reprodução pode demorar alguns segundos. O áudio de apps protegidos não pode ser capturado."
             error != null -> "Falha: " + error
             else -> "Nenhuma transmissão ativa."
         }
