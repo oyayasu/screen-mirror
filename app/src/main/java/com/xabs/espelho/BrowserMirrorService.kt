@@ -25,7 +25,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.os.SystemClock
+import android.graphics.Point
+import android.view.Surfaceimport android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import java.io.OutputStream
@@ -71,6 +72,28 @@ class BrowserMirrorService : Service() {
 
     private val started = AtomicBoolean(false)
     private val closing = AtomicBoolean(false)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val rotationWorker = Executors.newSingleThreadExecutor()
+    private val videoChangeLock = Any()
+    private var videoDrainFlag: AtomicBoolean? = null
+    @Volatile private var videoWidth = 0
+    @Volatile private var videoHeight = 0
+    private val displayManager by lazy { getSystemService(Context.DISPLAY_SERVICE) as DisplayManager }
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == Display.DEFAULT_DISPLAY) pollDisplaySize()
+        }
+    }
+    private val orientationWatcher = object : Runnable {
+        override fun run() {
+            if (!closing.get()) {
+                pollDisplaySize()
+                mainHandler.postDelayed(this, 1200L)
+            }
+        }
+    }
     private val mux = LiveTsMuxer()
     private val clients = Executors.newFixedThreadPool(5)
     private var projection: MediaProjection? = null
@@ -118,10 +141,16 @@ class BrowserMirrorService : Service() {
             capturePhase = "Permissão recebida; preparando tela"
             capture.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() { stopSelf() }
-            }, Handler(Looper.getMainLooper()))
+                override fun onCapturedContentResize(width: Int, height: Int) {
+                    // Android 14+ notifies the accurate captured content size.
+                    if (Build.VERSION.SDK_INT >= 34) scheduleVideoResize(width, height)
+                }
+            }, mainHandler)
             startVideo(capture)
             startAudio(capture)
             startHttp()
+            displayManager.registerDisplayListener(displayListener, mainHandler)
+            mainHandler.postDelayed(orientationWatcher, 1200L)
             if (encodedFrames == 0L) capturePhase = "Aguardando primeiros quadros"
         } catch (e: Exception) {
             lastError = e.message ?: "Não foi possível iniciar a transmissão."
@@ -150,53 +179,68 @@ class BrowserMirrorService : Service() {
         }
     }
 
-    private fun startVideo(capture: MediaProjection) {
+    @Suppress("DEPRECATION")
+    private fun fullScreenPixels(): Pair<Int, Int> {
+        val point = Point()
+        displayManager.getDisplay(Display.DEFAULT_DISPLAY)?.getRealSize(point)
+        if (point.x > 0 && point.y > 0) return point.x to point.y
         val metrics = resources.displayMetrics
-        val maxDimension = max(metrics.widthPixels, metrics.heightPixels)
-        // Escala para a capacidade usual de codificadores de tablets: não descarta quadros manualmente.
-        val scale = minOf(1.0f, 1280f / maxDimension)
-        val width = max(2, ((metrics.widthPixels * scale).roundToInt() and -2))
-        val height = max(2, ((metrics.heightPixels * scale).roundToInt() and -2))
+        return metrics.widthPixels to metrics.heightPixels
+    }
+
+    private fun videoDimensions(rawWidth: Int, rawHeight: Int): Pair<Int, Int> {
+        if (rawWidth <= 0 || rawHeight <= 0) return 0 to 0
+        val scale = minOf(1.0, 1280.0 / max(rawWidth, rawHeight))
+        val width = max(2, ((rawWidth * scale).roundToInt() and -2))
+        val height = max(2, ((rawHeight * scale).roundToInt() and -2))
+        return width to height
+    }
+
+    private fun makeEncoder(width: Int, height: Int): Triple<MediaCodec, Surface, Int> {
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        videoEncoder = codec
-        val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        val refresh = displayManager.getDisplay(Display.DEFAULT_DISPLAY)?.refreshRate ?: 60f
-        val desired = refresh.roundToInt().coerceIn(24, 120)
-        val capabilities = codec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities
-        val fps = listOf(desired, 90, 60, 50, 30, 24).distinct()
-            .filter { it <= desired }
-            .firstOrNull { capabilities.areSizeAndRateSupported(width, height, it.toDouble()) } ?: 24
-        val config = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-            setInteger(MediaFormat.KEY_BIT_RATE, if (fps >= 50) 5_500_000 else 4_000_000)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+        try {
+            val refresh = displayManager.getDisplay(Display.DEFAULT_DISPLAY)?.refreshRate ?: 60f
+            val desired = refresh.roundToInt().coerceIn(24, 120)
+            val capabilities = codec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities
+            val fps = listOf(desired, 90, 60, 50, 30, 24).distinct()
+                .filter { it <= desired }
+                .firstOrNull { capabilities.areSizeAndRateSupported(width, height, it.toDouble()) } ?: 24
+            val config = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+                setInteger(MediaFormat.KEY_BIT_RATE, if (fps >= 50) 5_500_000 else 4_000_000)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            }
+            codec.configure(config, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            val surface = codec.createInputSurface()
+            try {
+                codec.start()
+            } catch (e: Exception) {
+                surface.release()
+                throw e
+            }
+            return Triple(codec, surface, fps)
+        } catch (e: Exception) {
+            try { codec.release() } catch (_: Exception) {}
+            throw e
         }
-        codec.configure(config, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        val surface = codec.createInputSurface()
-        videoSurface = surface
-        codec.start()
-        screen = capture.createVirtualDisplay(
-            "Espelho HLS", width, height, metrics.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, surface, null, null
-        )
-        streamStatus = "Vídeo H.264: " + width + "×" + height + " / alvo " + fps + " FPS"
+    }
+
+    private fun startDrain(codec: MediaCodec) {
+        val running = AtomicBoolean(true)
+        videoDrainFlag = running
         videoThread = Thread({
             val info = MediaCodec.BufferInfo()
-            // MediaCodec implementations may report surface timestamps in different epochs.
-            // Anchor video frames to the same monotonic clock used by AudioRecord.
-            var videoEpochOffsetUs: Long? = null
+            var epochOffsetUs: Long? = null
             try {
-                while (!closing.get()) {
+                while (!closing.get() && running.get()) {
                     val index = codec.dequeueOutputBuffer(info, 15_000)
                     when {
                         index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                             val format = codec.outputFormat
                             fun csd(name: String): ByteArray? {
                                 val src = format.getByteBuffer(name) ?: return null
-                                val copy = ByteArray(src.remaining())
-                                src.get(copy)
-                                return copy
+                                return ByteArray(src.remaining()).also { src.get(it) }
                             }
                             mux.configureVideo(csd("csd-0"), csd("csd-1"))
                         }
@@ -208,12 +252,11 @@ class BrowserMirrorService : Service() {
                                     source.position(info.offset)
                                     source.limit(info.offset + info.size)
                                     source.get(data)
-                                    if (videoEpochOffsetUs == null) {
-                                        videoEpochOffsetUs = System.nanoTime() / 1000L - info.presentationTimeUs
+                                    if (epochOffsetUs == null) {
+                                        epochOffsetUs = System.nanoTime() / 1000L - info.presentationTimeUs
                                     }
-                                    val synchronizedPtsUs = info.presentationTimeUs + (videoEpochOffsetUs ?: 0L)
-                                    mux.addVideo(data, synchronizedPtsUs,
-                                        info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0)
+                                    val pts = info.presentationTimeUs + (epochOffsetUs ?: 0L)
+                                    mux.addVideo(data, pts, info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0)
                                     encodedFrames++
                                     lastVideoFrameElapsedMs = SystemClock.elapsedRealtime()
                                     completedSegments = mux.segmentCount()
@@ -227,7 +270,7 @@ class BrowserMirrorService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                if (!closing.get()) {
+                if (!closing.get() && running.get()) {
                     lastError = "Codificação de vídeo interrompida: " + (e.message ?: "erro")
                     capturePhase = "Codificador interrompido"
                     Log.e("EspelhoCapture", "Falha no codificador de vídeo", e)
@@ -235,6 +278,70 @@ class BrowserMirrorService : Service() {
                 }
             }
         }, "espelho-video").apply { isDaemon = true; start() }
+    }
+
+    private fun startVideo(capture: MediaProjection) {
+        val size = fullScreenPixels()
+        val (width, height) = videoDimensions(size.first, size.second)
+        val (codec, surface, fps) = makeEncoder(width, height)
+        videoEncoder = codec
+        videoSurface = surface
+        videoWidth = width
+        videoHeight = height
+        screen = capture.createVirtualDisplay(
+            "Espelho HLS", width, height, resources.configuration.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, surface, null, null
+        )
+        streamStatus = "Vídeo H.264: " + width + "×" + height + " / alvo " + fps + " FPS"
+        startDrain(codec)
+    }
+
+    private fun pollDisplaySize() {
+        if (closing.get()) return
+        val size = fullScreenPixels()
+        scheduleVideoResize(size.first, size.second)
+    }
+
+    private fun scheduleVideoResize(rawWidth: Int, rawHeight: Int) {
+        if (rawWidth <= 0 || rawHeight <= 0 || closing.get()) return
+        val (width, height) = videoDimensions(rawWidth, rawHeight)
+        if (width == videoWidth && height == videoHeight) return
+        try {
+            rotationWorker.execute {
+                synchronized(videoChangeLock) {
+                    if (closing.get() || width == videoWidth && height == videoHeight) return@synchronized
+                    val virtualDisplay = screen ?: return@synchronized
+                    try {
+                        capturePhase = "Adaptando imagem à rotação da tela…"
+                        // MediaProjection permits only ONE createVirtualDisplay per consent token.
+                        // Resize that display and exchange the encoder surface instead of recreating it.
+                        virtualDisplay.setSurface(null)
+                        videoDrainFlag?.set(false)
+                        videoThread?.join(750L)
+                        try { videoEncoder?.stop() } catch (_: Exception) {}
+                        try { videoEncoder?.release() } catch (_: Exception) {}
+                        try { videoSurface?.release() } catch (_: Exception) {}
+                        videoEncoder = null
+                        videoSurface = null
+                        mux.videoFormatChanged()
+                        val (nextCodec, nextSurface, fps) = makeEncoder(width, height)
+                        videoEncoder = nextCodec
+                        videoSurface = nextSurface
+                        virtualDisplay.resize(width, height, resources.configuration.densityDpi)
+                        virtualDisplay.setSurface(nextSurface)
+                        videoWidth = width
+                        videoHeight = height
+                        streamStatus = "Vídeo H.264: " + width + "×" + height + " / alvo " + fps + " FPS"
+                        startDrain(nextCodec)
+                        capturePhase = "Rotação aplicada; retomando o vídeo"
+                    } catch (e: Exception) {
+                        lastError = "Falha ao adaptar orientação: " + (e.message ?: "erro")
+                        Log.e("EspelhoCapture", "Falha ao trocar superfície de captura", e)
+                        stopSelf()
+                    }
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {}
     }
 
     private fun startAudio(capture: MediaProjection) {
@@ -413,6 +520,9 @@ class BrowserMirrorService : Service() {
 
     override fun onDestroy() {
         closing.set(true)
+        mainHandler.removeCallbacks(orientationWatcher)
+        try { displayManager.unregisterDisplayListener(displayListener) } catch (_: Exception) {}
+        rotationWorker.shutdownNow()
         currentUrl = null
         captureAuthorized = false
         capturePhase = if (lastError == null) "Encerrada" else "Falha encerrada"
@@ -420,10 +530,13 @@ class BrowserMirrorService : Service() {
         try { audioRecorder?.stop() } catch (_: Exception) {}
         try { screen?.release() } catch (_: Exception) {}
         try { projection?.stop() } catch (_: Exception) {}
-        try { videoThread?.join(250) } catch (_: Exception) {}
+        synchronized(videoChangeLock) {
+            videoDrainFlag?.set(false)
+            try { videoThread?.join(750) } catch (_: Exception) {}
+            try { videoEncoder?.stop() } catch (_: Exception) {}
+            try { videoEncoder?.release() } catch (_: Exception) {}
+        }
         try { audioThread?.join(250) } catch (_: Exception) {}
-        try { videoEncoder?.stop() } catch (_: Exception) {}
-        try { videoEncoder?.release() } catch (_: Exception) {}
         try { audioEncoder?.stop() } catch (_: Exception) {}
         try { audioEncoder?.release() } catch (_: Exception) {}
         try { audioRecorder?.release() } catch (_: Exception) {}
