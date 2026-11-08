@@ -159,7 +159,7 @@ class MainActivity : Activity() {
         nameBlock.addView(text("Espelho", 29f, ink, true))
         nameBlock.addView(text("Transmissão de tela", 13f, secondary))
         heading.addView(nameBlock, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val version = text("v0.5", 12f, accent, true).apply {
+        val version = text("v0.8", 12f, accent, true).apply {
             gravity = Gravity.CENTER
             background = shape(accentSoft, null, 14f)
             setPadding(dp(10), dp(7), dp(10), dp(7))
@@ -265,7 +265,7 @@ class MainActivity : Activity() {
         val verify = button("Verificar endereço", false) { verifyIp() }
         manual.addView(verify, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
         content.addView(manual)
-        content.addView(text("Espelho 0.5  ·  Sem anúncios", 12f, secondary).apply {
+        content.addView(text("Espelho 0.8  ·  Sem anúncios", 12f, secondary).apply {
             gravity = Gravity.CENTER
             setPadding(0, dp(24), 0, 0)
         })

@@ -8,7 +8,7 @@ import kotlin.math.max
 
 /** MPEG-TS local HLS: H.264 Annex B + AAC-LC 48 kHz stereo ADTS. */
 internal class LiveTsMuxer {
-    data class Segment(val id: Int, val durationSeconds: Double, val bytes: ByteArray, val startedAtMs: Long)
+    data class Segment(val id: Int, val durationSeconds: Double, val bytes: ByteArray, val startedAtMs: Long, val discontinuity: Boolean = false)
     private val lock = Any()
     private val segments = ArrayDeque<Segment>()
     private val buffer = ByteArrayOutputStream()
@@ -16,7 +16,10 @@ internal class LiveTsMuxer {
     private var nextId = 0
     private var segmentStartUs = -1L
     private var segmentStartWallMs = 0L
-    private val targetDurationSeconds = 6
+    private var lastVideoPtsUs = -1L
+    private var pendingDiscontinuity = false
+    private var removedDiscontinuities = 0
+    private val targetDurationSeconds = 4
     private var videoSamples = 0
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
@@ -45,6 +48,23 @@ internal class LiveTsMuxer {
         output.write(annexB(data))
         packetize(0x101, pes(0xE0, output.toByteArray(), ptsUs), ptsUs * 90L / 1000L)
         videoSamples++
+        lastVideoPtsUs = ptsUs
+    }
+
+    /**
+     * Close the previous format before a rotated AVC encoder starts.
+     * HLS.js then recreates the decoder for the new SPS/PPS and aspect ratio.
+     */
+    fun videoFormatChanged() = synchronized(lock) {
+        if (segmentStartUs >= 0 && videoSamples > 0) {
+            complete(max(0.5, (lastVideoPtsUs - segmentStartUs) / 1_000_000.0))
+        }
+        segmentStartUs = -1L
+        lastVideoPtsUs = -1L
+        sps = null
+        pps = null
+        pendingDiscontinuity = true
+        continuity.fill(0)
     }
 
     fun addAudio(aac: ByteArray, ptsUs: Long) = synchronized(lock) {
@@ -60,7 +80,9 @@ internal class LiveTsMuxer {
             append("#EXTM3U\n#EXT-X-VERSION:3\n")
             append("#EXT-X-TARGETDURATION:").append(targetDurationSeconds).append("\n")
             append("#EXT-X-MEDIA-SEQUENCE:").append(first).append("\n")
+            append("#EXT-X-DISCONTINUITY-SEQUENCE:").append(removedDiscontinuities).append("\n")
             for (seg in list) {
+                if (seg.discontinuity) append("#EXT-X-DISCONTINUITY\n")
                 append("#EXT-X-PROGRAM-DATE-TIME:").append(Instant.ofEpochMilli(seg.startedAtMs)).append("\n")
                 append("#EXTINF:")
                 append(String.format(Locale.US, "%.3f", seg.durationSeconds))
@@ -76,8 +98,12 @@ internal class LiveTsMuxer {
 
     private fun complete(duration: Double) {
         if (videoSamples > 0) {
-            segments.addLast(Segment(nextId++, duration, buffer.toByteArray(), segmentStartWallMs))
-            while (segments.size > 6) segments.removeFirst()
+            segments.addLast(Segment(nextId++, duration, buffer.toByteArray(), segmentStartWallMs, pendingDiscontinuity))
+            pendingDiscontinuity = false
+            while (segments.size > 6) {
+                val old = segments.removeFirst()
+                if (old.discontinuity) removedDiscontinuities++
+            }
         }
         buffer.reset()
         videoSamples = 0

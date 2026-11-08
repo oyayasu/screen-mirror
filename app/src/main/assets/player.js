@@ -10,6 +10,11 @@
   var details = document.getElementById("details");
   var live = document.getElementById("live");
   var direct = document.getElementById("direct");
+  var screen = document.querySelector(".screen");
+  var fullscreenButton = document.getElementById("fullscreen");
+  var exitCinemaButton = document.getElementById("exitCinema");
+  var fillButton = document.getElementById("fit");
+  var cinemaFallback = false;
   var hls = null, mode = "", ready = false, initialized = false, playing = false;
   var latest = -1, videoFrames = 0, lastVideoUpdate = Date.now(), errors = 0;
   // Samsung CU7700 (Tizen 7 / Chromium 94) supports MSE. Use HLS.js first;
@@ -18,6 +23,71 @@
   direct.href = playlist;
 
   function message(txt) { status.textContent = txt; }
+  function isTrueFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement ||
+      document.mozFullScreenElement || document.msFullscreenElement);
+  }
+  function setFallbackCinema() {
+    cinemaFallback = true;
+    screen.classList.add("cinema");
+    document.body.classList.add("cinema-active");
+    fullscreenButton.textContent = "Sair da tela cheia";
+  }
+  function enterFullscreen() {
+    if (cinemaFallback || isTrueFullscreen()) { exitFullscreen(); return; }
+    var method = screen.requestFullscreen || screen.webkitRequestFullscreen ||
+      screen.webkitRequestFullScreen || screen.mozRequestFullScreen || screen.msRequestFullscreen;
+    if (!method) { setFallbackCinema(); return; }
+    try {
+      var result = method.call(screen);
+      if (result && result.catch) result.catch(setFallbackCinema);
+      // Some TV browsers fail silently; use the viewport-filling fallback.
+      setTimeout(function () { if (!isTrueFullscreen()) setFallbackCinema(); }, 850);
+    } catch (e) { setFallbackCinema(); }
+  }
+  function exitFullscreen() {
+    cinemaFallback = false;
+    screen.classList.remove("cinema");
+    document.body.classList.remove("cinema-active");
+    fullscreenButton.textContent = "Tela cheia";
+    var method = document.exitFullscreen || document.webkitExitFullscreen ||
+      document.webkitCancelFullScreen || document.mozCancelFullScreen || document.msExitFullscreen;
+    if (isTrueFullscreen() && method) {
+      try { method.call(document); } catch (e) {}
+    }
+  }
+  function onFullscreenChange() {
+    if (isTrueFullscreen()) {
+      cinemaFallback = false;
+      screen.classList.remove("cinema");
+      document.body.classList.remove("cinema-active");
+      fullscreenButton.textContent = "Sair da tela cheia";
+    } else if (!cinemaFallback) {
+      fullscreenButton.textContent = "Tela cheia";
+    }
+  }
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+  document.addEventListener("mozfullscreenchange", onFullscreenChange);
+  fullscreenButton.onclick = enterFullscreen;
+  exitCinemaButton.onclick = exitFullscreen;
+  screen.addEventListener("dblclick", enterFullscreen);
+  fillButton.onclick = function () {
+    var fill = !screen.classList.contains("fill");
+    if (fill) screen.classList.add("fill");
+    else screen.classList.remove("fill");
+    fillButton.textContent = fill ? "Mostrar imagem inteira" : "Preencher TV";
+  };
+  document.addEventListener("keydown", function (event) {
+    var code = event.keyCode || event.which;
+    // Samsung remote Back = 10009; Escape = 27; browser Backspace = 8.
+    if (code === 10009 || code === 27 || code === 8) {
+      if (cinemaFallback || isTrueFullscreen()) {
+        event.preventDefault();
+        exitFullscreen();
+      }
+    }
+  });
   function detail(txt) { details.textContent = txt; }
 
   function playableNative() {
@@ -68,7 +138,7 @@
     try {
       if (hls && typeof hls.liveSyncPosition === "number") edge = hls.liveSyncPosition;
       else if (video.seekable.length) edge = video.seekable.end(video.seekable.length - 1) - 2;
-      if (isFinite(edge) && edge > 0 && edge - video.currentTime > 10) {
+      if (isFinite(edge) && edge > 0 && edge - video.currentTime > 15) {
         video.currentTime = Math.max(0, edge);
       }
     } catch (e) {}
@@ -92,8 +162,8 @@
           lowLatencyMode: false,
           liveSyncDurationCount: 2,
           liveMaxLatencyDurationCount: 5,
-          maxBufferLength: 12,
-          backBufferLength: 6,
+          maxBufferLength: 9,
+          backBufferLength: 8,
           manifestLoadingTimeOut: 10000,
           fragLoadingTimeOut: 10000
         });

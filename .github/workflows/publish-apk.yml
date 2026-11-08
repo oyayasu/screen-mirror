@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Nome da versão (ex.: v0.7)"
+        description: "Nome da versão (ex.: v0.8)"
         required: true
-        default: "v0.7"
+        default: "v0.8"
         type: string
 
 permissions:
@@ -57,11 +57,11 @@ jobs:
       - name: Testar e gerar APK
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
       - name: Preparar arquivo público
-        run: cp app/build/outputs/apk/debug/app-debug.apk Espelho-${{ inputs.version || 'v0.7' }}.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Espelho-${{ inputs.version || 'v0.8' }}.apk
       - name: Publicar no GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || 'v0.7' }}
+          VERSION: ${{ inputs.version || 'v0.8' }}
         run: |
           ASSET="Espelho-${VERSION}.apk"
           if gh release view "$VERSION" >/dev/null 2>&1; then
