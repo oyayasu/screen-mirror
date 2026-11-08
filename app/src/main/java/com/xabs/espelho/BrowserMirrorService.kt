@@ -135,7 +135,7 @@ class BrowserMirrorService : Service() {
                                 val out = ByteArrayOutputStream(150_000)
                                 cropped.compress(Bitmap.CompressFormat.JPEG, 66, out)
                                 frame = out.toByteArray()
-                            } finally { cropped.recycle() }
+                            } finally { if (cropped !== bitmap) cropped.recycle() }
                         } finally { bitmap.recycle() }
                     }
                 } catch (_: Exception) {
@@ -173,7 +173,7 @@ class BrowserMirrorService : Service() {
                 s.soTimeout = 3000
                 val input = s.getInputStream().bufferedReader(Charsets.US_ASCII)
                 val request = input.readLine() ?: return
-                repeat(40) { if (input.readLine().isNullOrEmpty()) return@repeat }
+                for (i in 0 until 40) { if (input.readLine().isNullOrEmpty()) break }
                 val path = request.split(' ').getOrNull(1)?.substringBefore('?') ?: "/"
                 val base = "/$pin"
                 val output = s.getOutputStream()
