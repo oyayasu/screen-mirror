@@ -3,8 +3,6 @@ package com.xabs.espelho
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.Manifest
-import android.content.pm.PackageManager
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -348,6 +346,12 @@ class MainActivity : Activity() {
                 setStatus("Busca na rede iniciada. Para Wi-Fi Direct, autorize a permissão solicitada.")
             }
         }
+        if (requestCode == 6403) {
+            if (grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
+                setStatus("Permissão de áudio negada. Só o vídeo poderá ser transmitido.")
+            }
+            startBrowserMirroring()
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -614,16 +618,6 @@ class MainActivity : Activity() {
             startActivityForResult(manager.createScreenCaptureIntent(), 6402)
         } catch (_: Exception) {
             setStatus("O tablet não disponibilizou a permissão para captura da tela.")
-        }
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 6403) {
-            if (grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
-                setStatus("Permissão de áudio negada. Só o vídeo poderá ser transmitido.")
-            }
-            startBrowserMirroring()
         }
     }
 
