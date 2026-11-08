@@ -3,6 +3,10 @@ package com.xabs.espelho
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.media.projection.MediaProjectionManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -19,7 +23,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -69,6 +72,13 @@ class MainActivity : Activity() {
     }
 
     private lateinit var status: TextView
+    private lateinit var mirrorStatus: TextView
+    private val mirrorStatusUpdater = object : Runnable {
+        override fun run() {
+            if (::mirrorStatus.isInitialized) updateMirrorStatus()
+            mainHandler.postDelayed(this, 1200L)
+        }
+    }
     private lateinit var counter: TextView
     private lateinit var deviceList: LinearLayout
     private lateinit var ipField: EditText
@@ -179,14 +189,24 @@ class MainActivity : Activity() {
         val connection = panel().apply {
             val lp = LinearLayout.LayoutParams(-1, -2); lp.topMargin = dp(18); layoutParams = lp
         }
-        connection.addView(text("Espelhamento", 18f, ink, true))
-        connection.addView(text("A conexão Miracast é gerenciada pelo sistema do tablet. Abra o seletor de transmissão para tentar conectar à TV.", 13f, secondary).apply {
+        connection.addView(text("Espelhamento pelo navegador da TV", 18f, ink, true))
+        connection.addView(text("Alternativa experimental para TVs com navegador. Sem Miracast, sem áudio e com atualização limitada. A TV precisará abrir o endereço informado.", 13f, secondary).apply {
             setPadding(0, dp(6), 0, dp(12))
         })
-        connection.addView(button("Abrir espelhamento do Android", false) { openCastSettings() })
+        connection.addView(button("Iniciar transmissão da tela", true) { startBrowserMirroring() })
+        mirrorStatus = text("Nenhuma transmissão ativa.", 14f, secondary).apply {
+            setPadding(0, dp(12), 0, dp(8))
+        }
+        connection.addView(mirrorStatus)
+        connection.addView(button("Copiar endereço", false) { copyMirrorAddress() }.apply {
+            val lp = LinearLayout.LayoutParams(-1, dp(46)); lp.topMargin = dp(6); layoutParams = lp
+        })
+        connection.addView(button("Parar transmissão", false) { stopBrowserMirroring() }.apply {
+            val lp = LinearLayout.LayoutParams(-1, dp(46)); lp.topMargin = dp(6); layoutParams = lp
+        })
         column.addView(connection)
 
-        column.addView(text("Versão 0.1 • sem anúncios • descoberta experimental", 12f, secondary).apply {
+        column.addView(text("Versão 0.2 • sem anúncios • descoberta + transmissão LAN experimental", 12f, secondary).apply {
             gravity = Gravity.CENTER
             setPadding(0, dp(24), 0, 0)
         })
@@ -268,7 +288,7 @@ class MainActivity : Activity() {
             actions.addView(button(if (saved) "Remover favorito" else "Favorito", false) {
                 toggleFavorite(device)
             }, LinearLayout.LayoutParams(0, dp(44), 1f))
-            val connect = button("Tentar espelhar", true) { openCastSettings() }
+            val connect = button("Opções de conexão", true) { showConnectionOptions(device) }
             val connectParams = LinearLayout.LayoutParams(0, dp(44), 1.2f)
             connectParams.marginStart = dp(8)
             actions.addView(connect, connectParams)
@@ -545,13 +565,108 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun openCastSettings() {
+    private fun showConnectionOptions(device: Device) {
+        AlertDialog.Builder(this)
+            .setTitle(device.name)
+            .setMessage(
+                "Detectado por " + device.channel + ". O Espelho identificou este equipamento na rede, " +
+                "mas não pode conectá-lo diretamente por Miracast. Escolha como deseja continuar."
+            )
+            .setPositiveButton("Abrir Smart View") { _, _ -> openSamsungSmartView() }
+            .setNeutralButton("Usar navegador da TV") { _, _ -> startBrowserMirroring() }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun openSamsungSmartView() {
+        val intent = Intent(Intent.ACTION_MAIN).setClassName(
+            "com.samsung.android.smartmirroring",
+            "com.samsung.android.smartmirroring.welcome.WelcomeIntroActivity"
+        )
         try {
-            startActivity(Intent(Settings.ACTION_CAST_SETTINGS))
+            startActivity(intent)
         } catch (_: Exception) {
-            try { startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS)) }
-            catch (_: Exception) { setStatus("O Android não disponibilizou o painel de transmissão.") }
+            AlertDialog.Builder(this)
+                .setTitle("Abra o Smart View")
+                .setMessage(
+                    "Esta versão do tablet não permite que o Espelho abra o Smart View diretamente. " +
+                    "Deslize duas vezes de cima para baixo e toque em Smart View. " +
+                    "A busca do Smart View é independente da lista de TVs encontrada aqui."
+                )
+                .setPositiveButton("Entendi", null)
+                .show()
         }
+    }
+
+    private fun startBrowserMirroring() {
+        try {
+            val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            @Suppress("DEPRECATION")
+            startActivityForResult(manager.createScreenCaptureIntent(), 6402)
+        } catch (_: Exception) {
+            setStatus("O tablet não disponibilizou a permissão para captura da tela.")
+        }
+    }
+
+    @Deprecated("Compatibilidade com Android 8-14")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 6402) return
+        if (resultCode != RESULT_OK || data == null) {
+            setStatus("Transmissão cancelada.")
+            return
+        }
+        try {
+            val service = Intent(this, BrowserMirrorService::class.java).apply {
+                action = BrowserMirrorService.ACTION_START
+                putExtra(BrowserMirrorService.EXTRA_PERMISSION_DATA, data)
+                putExtra(BrowserMirrorService.EXTRA_RESULT_CODE, resultCode)
+            }
+            startForegroundService(service)
+            setStatus("Iniciando transmissão local…")
+        } catch (_: Exception) {
+            setStatus("Não foi possível iniciar o serviço de transmissão.")
+        }
+    }
+
+    private fun copyMirrorAddress() {
+        val url = BrowserMirrorService.currentUrl
+        if (url == null) {
+            setStatus("Inicie a transmissão antes de copiar o endereço.")
+            return
+        }
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Endereço Espelho", url))
+        setStatus("Endereço copiado. Abra o navegador da TV e digite o link.")
+    }
+
+    private fun stopBrowserMirroring() {
+        startService(Intent(this, BrowserMirrorService::class.java).apply {
+            action = BrowserMirrorService.ACTION_STOP
+        })
+        setStatus("Transmissão encerrada.")
+    }
+
+    private fun updateMirrorStatus() {
+        val url = BrowserMirrorService.currentUrl
+        val error = BrowserMirrorService.lastError
+        mirrorStatus.text = when {
+            url != null -> "No navegador da TV, abra:\n" + url +
+                "\n\nA TV e o tablet devem estar na mesma rede. Compartilhe apenas em uma rede confiável."
+            error != null -> "Falha: " + error
+            else -> "Nenhuma transmissão ativa."
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        mainHandler.removeCallbacks(mirrorStatusUpdater)
+        mainHandler.post(mirrorStatusUpdater)
+    }
+
+    override fun onPause() {
+        mainHandler.removeCallbacks(mirrorStatusUpdater)
+        super.onPause()
     }
 
     override fun onDestroy() {
