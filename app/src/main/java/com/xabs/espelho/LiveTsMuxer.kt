@@ -72,6 +72,7 @@ internal class LiveTsMuxer {
 
     fun getSegment(id: Int): ByteArray? = synchronized(lock) { segments.firstOrNull { it.id == id }?.bytes }
     fun segmentCount(): Int = synchronized(lock) { segments.size }
+    fun latestSegmentId(): Int = synchronized(lock) { segments.peekLast()?.id ?: -1 }
 
     private fun complete(duration: Double) {
         if (videoSamples > 0) {
