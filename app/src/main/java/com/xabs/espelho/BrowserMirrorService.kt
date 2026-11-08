@@ -26,6 +26,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
 import android.view.Display
 import java.io.OutputStream
 import java.net.Inet4Address
@@ -56,6 +58,16 @@ class BrowserMirrorService : Service() {
             private set
         const val PORT = 8765
         const val FIXED_ACCESS_CODE = "750795"
+        @Volatile var captureAuthorized: Boolean = false
+            private set
+        @Volatile var encodedFrames: Long = 0
+            private set
+        @Volatile var completedSegments: Int = 0
+            private set
+        @Volatile var lastVideoFrameElapsedMs: Long = 0
+            private set
+        @Volatile var capturePhase: String = "Parado"
+            private set
     }
 
     private val started = AtomicBoolean(false)
@@ -85,6 +97,11 @@ class BrowserMirrorService : Service() {
         if (intent?.action != ACTION_START || !started.compareAndSet(false, true)) return START_NOT_STICKY
         currentUrl = null
         lastError = null
+        captureAuthorized = false
+        encodedFrames = 0
+        completedSegments = 0
+        lastVideoFrameElapsedMs = 0
+        capturePhase = "Iniciando serviço de captura"
         streamStatus = "Iniciando vídeo e áudio…"
         try {
             foregroundNotification()
@@ -98,14 +115,19 @@ class BrowserMirrorService : Service() {
             val capture = manager.getMediaProjection(Activity.RESULT_OK, token)
                 ?: error("O Android não liberou a captura.")
             projection = capture
+            captureAuthorized = true
+            capturePhase = "Permissão recebida; preparando tela"
             capture.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() { stopSelf() }
             }, Handler(Looper.getMainLooper()))
             startVideo(capture)
             startAudio(capture)
             startHttp()
+            if (encodedFrames == 0L) capturePhase = "Aguardando primeiros quadros"
         } catch (e: Exception) {
             lastError = e.message ?: "Não foi possível iniciar a transmissão."
+            capturePhase = "Falha ao iniciar captura"
+            Log.e("EspelhoCapture", "Falha ao iniciar MediaProjection", e)
             stopSelf()
         }
         return START_NOT_STICKY
@@ -193,6 +215,12 @@ class BrowserMirrorService : Service() {
                                     val synchronizedPtsUs = info.presentationTimeUs + (videoEpochOffsetUs ?: 0L)
                                     mux.addVideo(data, synchronizedPtsUs,
                                         info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0)
+                                    encodedFrames++
+                                    lastVideoFrameElapsedMs = SystemClock.elapsedRealtime()
+                                    completedSegments = mux.segmentCount()
+                                    capturePhase = if (completedSegments > 0)
+                                        "Vídeo sendo codificado e segmentado" else
+                                        "Vídeo capturado; preparando transmissão"
                                 }
                             }
                             codec.releaseOutputBuffer(index, false)
@@ -202,6 +230,8 @@ class BrowserMirrorService : Service() {
             } catch (e: Exception) {
                 if (!closing.get()) {
                     lastError = "Codificação de vídeo interrompida: " + (e.message ?: "erro")
+                    capturePhase = "Codificador interrompido"
+                    Log.e("EspelhoCapture", "Falha no codificador de vídeo", e)
                     stopSelf()
                 }
             }
@@ -512,6 +542,8 @@ class BrowserMirrorService : Service() {
     override fun onDestroy() {
         closing.set(true)
         currentUrl = null
+        captureAuthorized = false
+        capturePhase = if (lastError == null) "Encerrada" else "Falha encerrada"
         try { listener?.close() } catch (_: Exception) {}
         try { audioRecorder?.stop() } catch (_: Exception) {}
         try { screen?.release() } catch (_: Exception) {}

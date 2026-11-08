@@ -10,7 +10,7 @@ on:
       version:
         description: "Nome da versão (ex.: v0.6)"
         required: true
-        default: "v0.5"
+        default: "v0.6"
         type: string
 
 permissions:
@@ -36,7 +36,7 @@ jobs:
       - name: Testar e gerar APK
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
       - name: Preparar arquivo público
-        run: cp app/build/outputs/apk/debug/app-debug.apk Espelho-${{ inputs.version || 'v0.5' }}.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Espelho-${{ inputs.version || 'v0.6' }}.apk
       - name: Publicar no GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
