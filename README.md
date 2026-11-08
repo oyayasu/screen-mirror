@@ -1,4 +1,4 @@
-# Espelho Android v0.6 — reprodução ao vivo e endereço fixo
+# Espelho Android v0.7 — reprodução ao vivo e endereço fixo
 
 Aplicativo gratuito e sem anúncios para Android. Descobre TVs por Wi-Fi Direct, SSDP, mDNS ou IP, com dois caminhos separados: Smart View nativo da Samsung (o Espelho não consegue forçar uma TV encontrada a aparecer na lista do sistema) e transmissão experimental local por navegador.
 
@@ -26,11 +26,21 @@ Aplicativo gratuito e sem anúncios para Android. Descobre TVs por Wi-Fi Direct,
 - O aplicativo mostra uma notificação de serviço enquanto transmite. Os indicadores da interface do sistema variam conforme a versão do Android.
 - Se a televisão mostrar tela preta, observe o campo **Quadros de vídeo**: valor sempre zero indica problema antes do envio; valor crescente indica captura funcionando e direciona o diagnóstico ao HLS/player da Samsung.
 
+## Player local v0.7: compatibilidade ampliada
+
+- Corrigido o principal problema da versão anterior: `<video src="live.m3u8">` não funciona em muitos navegadores, mesmo quando o servidor HLS está ativo. Agora o player inclui **HLS.js**, capaz de reproduzir HLS pelo MediaSource em Chrome/Firefox/Edge Android ou desktop.
+- O JavaScript HLS.js v1.7.4 e sua licença Apache-2.0 são incluídos **dentro do APK pelo workflow GitHub Actions**. A televisão e o tablet não precisam de internet para reproduzir; tudo é servido pela rede local.
+- **Fallback nativo** para Smart TVs Samsung/Tizen, Safari e browsers com suporte HLS; botão `Player alternativo` permite alternar quando disponível.
+- Tela simples com botões `Reproduzir ao vivo`, `Reconectar` e `Player alternativo`, sem exigir que o usuário configure codecs. Mensagens claras quando falta suporte ou há erro de decodificação.
+- Endereço continua `http://IP_DO_TABLET:8765/750795`. O stream de áudio interno permanece AAC; quadros de vídeo continuam H.264.
+- Foi incluído teste que gera amostra H.264 por FFmpeg e verifica, usando FFprobe e FFmpeg, se os segmentos MPEG-TS podem ser reconhecidos e decodificados.
+- Não é tecnicamente possível garantir todos os navegadores: os que não suportam HLS nativo nem MediaSource não poderão reproduzir este formato; o app informa essa limitação sem mostrar um vídeo falso.
+
 ## Transmissão com som (HLS)
 
 Esta versão substitui a transmissão JPEG a ~4 quadros por segundo por vídeo H.264 codificado por hardware (MediaCodec), com taxa de quadros ajustada à tela e à capacidade do encoder, e áudio AAC interno capturado com AudioPlaybackCapture (Android 10 ou superior).
 
-1. Instale o APK v0.6 e abra o Espelho no tablet.
+1. Instale o APK v0.7 e abra o Espelho no tablet.
 2. Toque em **Iniciar transmissão da tela** e aceite as permissões de áudio e captura de tela.
 3. No navegador da sua TV Samsung, abra **o endereço completo** mostrado pelo Espelho.
 4. Pressione **Reproduzir vídeo e áudio** na TV. Se necessário, abra o link **player da TV** oferecido na página.
