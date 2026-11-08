@@ -849,14 +849,21 @@ class MainActivity : Activity() {
             if (error != null && url == null || stalled) Color.rgb(179, 73, 74) else accent
         )
         mirrorStatus.text = when {
-            url != null -> "No navegador da TV, abra:\n" + url + "\n\n" +
-                "Autorização de tela: " + if (consent) "concedida" else "não confirmada" +
-                "\nQuadros de vídeo: " + frames + " · Segmentos HLS: " + segments +
-                "\n" + BrowserMirrorService.streamStatus + "\n" +
-                BrowserMirrorService.capturePhase +
-                if (frames == 0L) "\n\nSe continuar em zero, reinicie a captura e autorize a tela inteira."
-                else if (stalled) "\n\nNenhum quadro novo há mais de 12 segundos. Reinicie a captura."
-                else "\n\nO link só compartilha imagens se a captura estiver produzindo quadros."
+            url != null -> buildString {
+                append("No navegador da TV, abra:\n")
+                append(url)
+                append("\n\nAutorização de tela: ")
+                append(if (consent) "concedida" else "não confirmada")
+                append("\nQuadros de vídeo: ").append(frames)
+                append(" · Segmentos HLS: ").append(segments)
+                append("\n").append(BrowserMirrorService.streamStatus)
+                append("\n").append(BrowserMirrorService.capturePhase)
+                when {
+                    frames == 0L -> append("\n\nSe continuar em zero, reinicie a captura e autorize a tela inteira.")
+                    stalled -> append("\n\nNenhum quadro novo há mais de 12 segundos. Reinicie a captura.")
+                    else -> append("\n\nO link só compartilha imagens se a captura estiver produzindo quadros.")
+                }
+            }
             captureRequestPending -> captureNotice
             error != null -> "Erro: " + error + "\n" + captureNotice
             else -> captureNotice
