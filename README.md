@@ -1,28 +1,31 @@
-# Espelho Android v0.1 — protótipo de descoberta
+# Espelho Android v0.2 — descoberta e espelhamento local experimental
 
-Aplicativo experimental para localizar TVs na rede e ajudar a iniciar o espelhamento nativo do Android. **Não implementa um transmissor Miracast nem garante espelhamento.**
+Aplicativo sem anúncios para encontrar TVs (SSDP, mDNS, Wi-Fi Direct e IP) e testar dois caminhos de espelhamento:
 
-## O que faz
-- Procura dispositivos por SSDP/UPnP, descoberta de serviço mDNS/NSD e Wi-Fi Direct (P2P).
-- Procura potenciais TVs Samsung na sub-rede IPv4 local por portas de controle TCP (8001, 8002 e 55000). Essa detecção é heurística; a porta pode pertencer a outro equipamento e não comprova compatibilidade com espelhamento.
-- Permite testar um IP manualmente, salvar dispositivos favoritos e abrir a tela de transmissão do Android.
-- Interface em português, sem anúncios, contas, rastreadores ou backend.
+1. **Smart View (Samsung):** abre o seletor nativo da Samsung, quando a versão do tablet permite. A detecção de dispositivos do Espelho **não** se transfere para a lista do Smart View; isso depende do sistema.
+2. **Navegador da TV:** transmite capturas da tela como imagens JPEG sobre HTTP na mesma rede Wi-Fi. A TV precisa ter navegador próprio, abrir o endereço exibido no tablet e permanecer conectada à rede local. A permissão de captura do Android deve ser aceita antes de começar.
 
-## Compilação via GitHub Actions
-1. Crie um repositório GitHub e envie o conteúdo deste ZIP mantendo as pastas.
-2. Em **Actions**, escolha **Build APK** > **Run workflow** (ou faça um push).
-3. Na execução concluída, baixe o artefato `espelho-android-debug`, que contém `app-debug.apk`.
+## Como testar a transmissão pelo navegador
 
-Ou abra o projeto no Android Studio com JDK 17 e Gradle 8.11.1; como o ZIP não inclui o binário do Gradle Wrapper, o Android Studio deverá ter Gradle configurado ou disponibilizado por ele.
-
-## Permissões
-- Android 13+: dispositivos Wi-Fi próximos para descoberta P2P.
-- Android 12 ou anterior: localização para descoberta P2P; o Android também exige que o serviço de localização esteja habilitado.
-- Acesso à rede local para descoberta e teste de endereço IP.
+1. No tablet, abra Espelho > **Iniciar transmissão da tela** e aceite a solicitação do Android.
+2. O aplicativo exibirá um endereço local como `http://192.168.1.20:8765/123456`. O endereço real só aparecerá depois que o serviço começar.
+3. Abra o navegador de internet da Smart TV Samsung e digite o endereço completo, inclusive os seis dígitos finais.
+4. Para terminar, volte ao Espelho e toque em **Parar transmissão** (ou interrompa a captura no Android).
 
 ## Limitações
-- Aparecer no resultado **não** significa que a TV aceite espelhamento.
-- "Abrir espelhamento" abre o painel do sistema Android, que ainda pode não mostrar a TV.
-- O botão "Procurar IPs" faz uma busca restrita à faixa local IPv4 /24; não acessa a internet e não executa pareamento.
-- O resultado depende de firmware/ano/modelo da TV e das restrições de rede e do Android.
-- Versão de código-fonte experimental: APK e comportamento no tablet ainda não foram validados.
+
+- Este método experimental **não é Miracast nem Google Cast** e não transmite áudio. A taxa de quadros e a latência são limitadas (aprox. 4 imagens/segundo sob condições favoráveis), por isso não é indicado para jogos ou filmes.
+- O navegador de algumas TVs pode não executar o código da página ou pode restringir conexões HTTP locais. A reprodução na sua TV ainda depende de teste físico.
+- A transmissão usa somente a rede local, sem servidor externo. Quem tiver acesso ao endereço completo durante uma sessão poderá ver a tela; use somente redes domésticas confiáveis. Um PIN temporário integra o link.
+- Imagens de conteúdo protegido podem aparecer em preto pelas proteções do Android.
+- A detecção da TV não comprova suporte Miracast e não autoriza conexão direta. Android restringe o acesso de aplicativos comuns aos controles internos Wi-Fi Display.
+- Se a orientação do tablet mudar, reinicie a transmissão para ajustar o enquadramento.
+- O projeto compila um APK debug via GitHub Actions, mas o funcionamento no Tab S6 Lite e na TV ainda precisa ser testado.
+
+## Compilar
+
+Em **Actions → Build APK**, execute o workflow ou faça um push. Baixe o artefato `espelho-android-debug` com `app-debug.apk`. Android Studio com JDK 17/Gradle 8.11.1 também funciona.
+
+## Permissões
+
+Rede local (INTERNET/Wi-Fi) para descoberta e transmissão, Wi-Fi Direct para detecção P2P, e serviço de mídia em primeiro plano para captura autorizada pelo Android. O app não usa nuvem, anúncios ou cadastro.
