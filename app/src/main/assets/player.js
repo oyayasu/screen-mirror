@@ -12,8 +12,9 @@
   var direct = document.getElementById("direct");
   var hls = null, mode = "", ready = false, initialized = false, playing = false;
   var latest = -1, videoFrames = 0, lastVideoUpdate = Date.now(), errors = 0;
-  var preferNative = /Tizen|Smart.?TV|SMART-TV/i.test(navigator.userAgent) &&
-    !!video.canPlayType("application/vnd.apple.mpegurl");
+  // Samsung CU7700 (Tizen 7 / Chromium 94) supports MSE. Use HLS.js first;
+  // HTML5 canPlayType('m3u8') is not proof that the TV's native HLS actually plays.
+  var preferNative = false;
   direct.href = playlist;
 
   function message(txt) { status.textContent = txt; }
