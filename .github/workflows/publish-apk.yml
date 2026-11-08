@@ -40,7 +40,7 @@ jobs:
       - name: Publicar no GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || 'v0.5' }}
+          VERSION: ${{ inputs.version || 'v0.6' }}
         run: |
           ASSET="Espelho-${VERSION}.apk"
           if gh release view "$VERSION" >/dev/null 2>&1; then
