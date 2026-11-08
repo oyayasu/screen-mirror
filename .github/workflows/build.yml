@@ -23,6 +23,27 @@ jobs:
           SDKMANAGER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -type f -path '*/bin/sdkmanager' | head -n 1)
           test -n "$SDKMANAGER"
           "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Incluir HLS.js no APK (player totalmente local)
+        run: |
+          mkdir -p app/src/main/assets
+          curl -fL --retry 3 --connect-timeout 20 --max-time 120 \
+            https://cdn.jsdelivr.net/npm/hls.js@1.7.4/dist/hls.min.js \
+            -o app/src/main/assets/hls.min.js
+          curl -fL --retry 3 --connect-timeout 20 --max-time 120 \
+            https://cdn.jsdelivr.net/npm/hls.js@1.7.4/LICENSE \
+            -o app/src/main/assets/hls-LICENSE.txt
+          test "$(wc -c < app/src/main/assets/hls.min.js)" -gt 100000
+          node --check app/src/main/assets/player.js
+          node --check app/src/main/assets/hls.min.js
+
+      - name: Preparar ferramentas para validar os segmentos HLS
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
       - name: Build debug APK
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
       - uses: actions/upload-artifact@v4
