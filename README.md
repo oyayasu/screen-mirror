@@ -1,4 +1,4 @@
-# Espelho Android v0.7 — reprodução ao vivo e endereço fixo
+# Espelho Android v0.8 — reprodução ao vivo e endereço fixo
 
 Aplicativo gratuito e sem anúncios para Android. Descobre TVs por Wi-Fi Direct, SSDP, mDNS ou IP, com dois caminhos separados: Smart View nativo da Samsung (o Espelho não consegue forçar uma TV encontrada a aparecer na lista do sistema) e transmissão experimental local por navegador.
 
@@ -36,11 +36,22 @@ Aplicativo gratuito e sem anúncios para Android. Descobre TVs por Wi-Fi Direct,
 - Foi incluído teste que gera amostra H.264 por FFmpeg e verifica, usando FFprobe e FFmpeg, se os segmentos MPEG-TS podem ser reconhecidos e decodificados.
 - Não é tecnicamente possível garantir todos os navegadores: os que não suportam HLS nativo nem MediaSource não poderão reproduzir este formato; o app informa essa limitação sem mostrar um vídeo falso.
 
+## Experiência de vídeo v0.8: tela cheia e rotação real
+
+- No navegador da TV, **Tela cheia** usa Fullscreen API e APIs prefixadas quando disponíveis; quando o navegador nega, a página alterna para um modo cinema que ocupa a área visível da página. O botão **Sair da tela cheia**, a tecla Escape ou a tecla Back do controle da Samsung fecham o modo cinema.
+- O botão **Preencher TV** escolhe `object-fit: cover` para preencher a tela (pode cortar as bordas); **Mostrar imagem inteira** preserva a imagem sem cortes (`contain`).
+- Quando o tablet gira, o app mantém o **mesmo MediaProjection e o mesmo VirtualDisplay** autorizados. A tela virtual é redimensionada e o codificador H.264 recebe uma nova superfície na orientação correta. **A rotação não pede nova autorização**.
+- No Android 14+, usamos o callback `onCapturedContentResize`. No Android 13 e anteriores, a orientação é verificada periodicamente com as dimensões reais do display e um listener de alterações.
+- O HLS adiciona `#EXT-X-DISCONTINUITY` na mudança de formato para que o player reprocesse a resolução e a proporção, sem confundir quadros da orientação antiga com a nova.
+- Reduzimos o `EXT-X-TARGETDURATION` anunciado de 6 para 4 segundos, preservando segmentos de aproximadamente 2 segundos e mantendo o buffer voltado à reprodução contínua, não à latência mínima.
+- **Limite importante**: um navegador que não oferece Fullscreen API pode impedir que a página esconda a barra própria da TV; o modo cinema usa o máximo de área disponível, mas não remove a interface do navegador que o firmware controla.
+- A mudança de orientação e o modo cinema dependem de teste no Samsung Tab S6 Lite e no navegador da CU7700; os testes automatizados não substituem essa validação.
+
 ## Transmissão com som (HLS)
 
 Esta versão substitui a transmissão JPEG a ~4 quadros por segundo por vídeo H.264 codificado por hardware (MediaCodec), com taxa de quadros ajustada à tela e à capacidade do encoder, e áudio AAC interno capturado com AudioPlaybackCapture (Android 10 ou superior).
 
-1. Instale o APK v0.7 e abra o Espelho no tablet.
+1. Instale o APK v0.8 e abra o Espelho no tablet.
 2. Toque em **Iniciar transmissão da tela** e aceite as permissões de áudio e captura de tela.
 3. No navegador da sua TV Samsung, abra **o endereço completo** mostrado pelo Espelho.
 4. Pressione **Reproduzir vídeo e áudio** na TV. Se necessário, abra o link **player da TV** oferecido na página.
