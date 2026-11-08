@@ -19,7 +19,7 @@ internal class LiveTsMuxer {
     private var lastVideoPtsUs = -1L
     private var pendingDiscontinuity = false
     private var removedDiscontinuities = 0
-    private val targetDurationSeconds = 6
+    private val targetDurationSeconds = 4
     private var videoSamples = 0
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
