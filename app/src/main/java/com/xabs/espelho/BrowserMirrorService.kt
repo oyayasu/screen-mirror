@@ -33,7 +33,6 @@ import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
-import java.security.SecureRandom
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
@@ -56,6 +55,7 @@ class BrowserMirrorService : Service() {
         @Volatile var streamStatus: String = ""
             private set
         const val PORT = 8765
+        const val FIXED_ACCESS_CODE = "750795"
     }
 
     private val started = AtomicBoolean(false)
@@ -72,7 +72,7 @@ class BrowserMirrorService : Service() {
     private var audioThread: Thread? = null
     private var listener: ServerSocket? = null
     private var acceptThread: Thread? = null
-    private var pin = ""
+    private val pin = FIXED_ACCESS_CODE
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -149,7 +149,7 @@ class BrowserMirrorService : Service() {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_BIT_RATE, if (fps >= 50) 5_500_000 else 4_000_000)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
         }
         codec.configure(config, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val surface = codec.createInputSurface()
@@ -296,7 +296,6 @@ class BrowserMirrorService : Service() {
 
     private fun startHttp() {
         val address = wifiIp() ?: error("Conecte o tablet ao Wi-Fi.")
-        pin = (100000 + SecureRandom().nextInt(900000)).toString()
         val socket = ServerSocket(PORT, 20, InetAddress.getByName(address))
         listener = socket
         currentUrl = "http://" + address + ":" + PORT + "/" + pin
@@ -327,6 +326,13 @@ class BrowserMirrorService : Service() {
                         respond(output, 200, "text/html; charset=utf-8", html(root).toByteArray(Charsets.UTF_8))
                     route == root + "/live.m3u8" ->
                         respond(output, 200, "application/vnd.apple.mpegurl", mux.playlist(root).toByteArray(Charsets.UTF_8))
+                    route == root + "/live-status" -> {
+                        val count = mux.segmentCount()
+                        val latest = mux.latestSegmentId()
+                        val json = "{\"ready\":" + (count >= 3) + ",\"segments\":" + count +
+                            ",\"latest\":" + latest + "}"
+                        respond(output, 200, "application/json; charset=utf-8", json.toByteArray(Charsets.UTF_8))
+                    }
                     route.startsWith(root + "/segment-") && route.endsWith(".ts") -> {
                         val id = route.removePrefix(root + "/segment-").removeSuffix(".ts").toIntOrNull()
                         val bytes = id?.let { mux.getSegment(it) }
@@ -345,7 +351,7 @@ class BrowserMirrorService : Service() {
         val reason = if (status == 200) "OK" else "Not Found"
         val header = "HTTP/1.1 " + status + " " + reason + "\r\n" +
             "Content-Type: " + type + "\r\nContent-Length: " + data.size +
-            "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+            "\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nConnection: close\r\n\r\n"
         output.write(header.toByteArray(Charsets.US_ASCII))
         output.write(data)
         output.flush()
@@ -354,25 +360,138 @@ class BrowserMirrorService : Service() {
     private fun html(root: String): String = """
         <!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width,initial-scale=1">
-        <title>Espelho — transmissão</title>
+        <title>Espelho — ao vivo</title>
         <style>
-        html,body{margin:0;background:#070707;color:#eee;font:17px Arial,sans-serif}
-        main{min-height:100vh;display:flex;justify-content:center;align-items:center;flex-direction:column;gap:16px}
-        video{display:block;width:100vw;max-height:89vh;object-fit:contain}
-        button{border:0;border-radius:12px;padding:16px 28px;font-size:20px;background:#ddd;color:#111}
-        small{color:#aaa;padding:12px;text-align:center}
+        html,body{margin:0;background:#09090e;color:#eee;font:17px Arial,sans-serif}
+        main{min-height:100vh;display:flex;justify-content:center;align-items:center;flex-direction:column;gap:12px}
+        video{display:block;width:100vw;max-height:89vh;object-fit:contain;background:#09090e}
+        button{border:0;border-radius:14px;padding:15px 25px;font-size:18px;background:#dcd7fa;color:#252238}
+        #live{position:absolute;top:12px;left:12px;border-radius:16px;background:#aa3138;color:white;padding:6px 12px;font-size:14px;font-weight:bold;display:none}
+        #hint{color:#aaa;padding:8px 16px;text-align:center}
+        #sync{display:none;background:#37334b;color:white}
+        #fallback{color:#cac4ff;padding:8px;text-align:center;font-size:14px}
         </style></head><body><main>
-        <video id="v" controls playsinline preload="auto" autoplay>
-        <source src="$root/live.m3u8" type="application/vnd.apple.mpegurl">
-        </video>
-        <button id="start" onclick="play()">Reproduzir vídeo e áudio</button>
-        <small id="hint">Transmissão HLS local. O início pode levar alguns segundos.</small>
-        <a style="color:#aaa" href="$root/live.m3u8">Abrir transmissão no player da TV</a>
+        <div id="live">AO VIVO</div>
+        <video id="v" playsinline preload="none" autoplay></video>
+        <button id="start" type="button">Iniciar ao vivo</button>
+        <button id="sync" type="button">Voltar ao vivo</button>
+        <small id="hint">Preparando vídeo e áudio ao vivo…</small>
+        <a id="fallback" href="$root/live.m3u8">Abrir no player nativo da TV</a>
         </main><script>
-        var video=document.getElementById('v');
-        function play(){video.play().then(function(){document.getElementById('start').style.display='none';})
-          .catch(function(){document.getElementById('hint').innerText='O navegador da TV não iniciou o vídeo. Tente o link do player abaixo.';});}
-        video.addEventListener('error',function(){document.getElementById('hint').innerText='Formato HLS não aceito neste navegador. Tente o link do player abaixo.';});
+        (function(){
+          var video=document.getElementById('v');
+          var start=document.getElementById('start');
+          var resync=document.getElementById('sync');
+          var hint=document.getElementById('hint');
+          var live=document.getElementById('live');
+          var ready=false, started=false, latest=-1, lastLatest=-1, stalePolls=0;
+          var currentRange=-1, staleRangePolls=0;
+          var sourceUrl='$root/live.m3u8';
+
+          function setHint(message){hint.innerHTML=message;}
+          function edge(){
+            try{
+              if(video.seekable && video.seekable.length>0) return video.seekable.end(video.seekable.length-1);
+              if(video.buffered && video.buffered.length>0) return video.buffered.end(video.buffered.length-1);
+            }catch(e){}
+            return -1;
+          }
+          function goLive(){
+            var end=edge();
+            if(end>0){
+              var target=Math.max(0,end-1.5);
+              if(!isNaN(video.currentTime) && end-video.currentTime>3.5){
+                try{video.currentTime=target;}catch(e){}
+              }
+            }
+          }
+          function playVideo(){
+            try{
+              var result=video.play();
+              if(result && result.then){
+                result.then(function(){
+                  start.style.display='none'; live.style.display='block'; resync.style.display='inline-block';
+                  setHint('Transmissão ao vivo');
+                  goLive();
+                },function(){
+                  setHint('Toque em Iniciar ao vivo para liberar a reprodução com som.');
+                  start.style.display='inline-block';
+                });
+              }else{
+                start.style.display='none'; live.style.display='block'; resync.style.display='inline-block';
+                goLive();
+              }
+            }catch(e){
+              start.style.display='inline-block';
+              setHint('O navegador da TV bloqueou o início automático.');
+            }
+          }
+          function loadStream(){
+            if(!ready) return;
+            started=true;
+            try{
+              video.pause();
+              video.removeAttribute('src');
+              video.load();
+              video.src=sourceUrl+'?session='+Date.now();
+              video.load();
+              playVideo();
+            }catch(e){
+              setHint('Não foi possível iniciar HLS no navegador desta TV.');
+            }
+          }
+          function status(){
+            var req=new XMLHttpRequest();
+            req.onreadystatechange=function(){
+              if(req.readyState!==4) return;
+              if(req.status===200){
+                try{
+                  var data=JSON.parse(req.responseText);
+                  ready=!!data.ready;
+                  latest=data.latest;
+                  if(ready && !started){
+                    setHint('Transmissão pronta. Toque em Iniciar ao vivo.');
+                    // Tenta iniciar normalmente, mas mantém o botão para TVs que exigem gesto.
+                    loadStream();
+                  }
+                  if(started && ready){
+                    goLive();
+                    var end=edge();
+                    if(end>=0 && end>currentRange+0.4){
+                      currentRange=end; staleRangePolls=0;
+                    }else if(latest!==lastLatest && end>=0){staleRangePolls++;}
+                    if(staleRangePolls>=7){
+                      staleRangePolls=0;
+                      setHint('Reaproximando a transmissão ao vivo…');
+                      loadStream();
+                    }
+                  }
+                  lastLatest=latest;
+                }catch(e){}
+              } else if(started) {
+                setHint('Conexão local indisponível. Verifique o tablet.');
+              }
+            };
+            req.open('GET','$root/live-status?ts='+Date.now(),true);
+            req.send(null);
+          }
+          start.onclick=function(){if(ready){if(!started)loadStream();else playVideo();}
+            else setHint('Aguardando os primeiros segundos de transmissão no tablet…');};
+          resync.onclick=function(){goLive();if(!video.seekable || !video.seekable.length)loadStream();};
+          video.addEventListener('loadedmetadata',function(){goLive();});
+          video.addEventListener('timeupdate',function(){goLive();});
+          video.addEventListener('playing',function(){
+            start.style.display='none';live.style.display='block';resync.style.display='inline-block';
+          });
+          video.addEventListener('ended',function(){setHint('Retomando ao vivo…');loadStream();});
+          video.addEventListener('error',function(){
+            setHint('O navegador não conseguiu reproduzir HLS. Tente o player nativo da TV.');
+            start.style.display='inline-block';live.style.display='none';
+          });
+          setInterval(status,1600);
+          setInterval(function(){if(started){goLive();}},1200);
+          status();
+        })();
         </script></body></html>
     """.trimIndent()
 
