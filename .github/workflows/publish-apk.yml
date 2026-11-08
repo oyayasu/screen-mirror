@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Nome da versão (ex.: v0.6)"
+        description: "Nome da versão (ex.: v0.7)"
         required: true
-        default: "v0.6"
+        default: "v0.7"
         type: string
 
 permissions:
@@ -33,14 +33,27 @@ jobs:
           SDKMANAGER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -type f -path '*/bin/sdkmanager' | head -n 1)
           test -n "$SDKMANAGER"
           "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Incluir HLS.js no APK (player totalmente local)
+        run: |
+          mkdir -p app/src/main/assets
+          curl -fL --retry 3 --connect-timeout 20 --max-time 120 \
+            https://cdn.jsdelivr.net/npm/hls.js@1.7.4/dist/hls.min.js \
+            -o app/src/main/assets/hls.min.js
+          curl -fL --retry 3 --connect-timeout 20 --max-time 120 \
+            https://cdn.jsdelivr.net/npm/hls.js@1.7.4/LICENSE \
+            -o app/src/main/assets/hls-LICENSE.txt
+          test "$(wc -c < app/src/main/assets/hls.min.js)" -gt 100000
+          node --check app/src/main/assets/player.js
+          node --check app/src/main/assets/hls.min.js
+          command -v ffmpeg && command -v ffprobe
       - name: Testar e gerar APK
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
       - name: Preparar arquivo público
-        run: cp app/build/outputs/apk/debug/app-debug.apk Espelho-${{ inputs.version || 'v0.6' }}.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Espelho-${{ inputs.version || 'v0.7' }}.apk
       - name: Publicar no GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version || 'v0.6' }}
+          VERSION: ${{ inputs.version || 'v0.7' }}
         run: |
           ASSET="Espelho-${VERSION}.apk"
           if gh release view "$VERSION" >/dev/null 2>&1; then
