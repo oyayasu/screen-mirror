@@ -3,17 +3,20 @@ package com.xabs.espelho
 import java.io.ByteArrayOutputStream
 import java.util.ArrayDeque
 import java.util.Locale
+import java.time.Instant
 import kotlin.math.max
 
 /** MPEG-TS local HLS: H.264 Annex B + AAC-LC 48 kHz stereo ADTS. */
 internal class LiveTsMuxer {
-    data class Segment(val id: Int, val durationSeconds: Double, val bytes: ByteArray)
+    data class Segment(val id: Int, val durationSeconds: Double, val bytes: ByteArray, val startedAtMs: Long)
     private val lock = Any()
     private val segments = ArrayDeque<Segment>()
     private val buffer = ByteArrayOutputStream()
     private val continuity = IntArray(8192)
     private var nextId = 0
     private var segmentStartUs = -1L
+    private var segmentStartWallMs = 0L
+    private val targetDurationSeconds = 6
     private var videoSamples = 0
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
@@ -31,6 +34,7 @@ internal class LiveTsMuxer {
         }
         if (segmentStartUs < 0) {
             segmentStartUs = ptsUs
+            segmentStartWallMs = System.currentTimeMillis()
             tables()
         }
         val output = ByteArrayOutputStream(data.size + 100)
@@ -51,11 +55,13 @@ internal class LiveTsMuxer {
     fun playlist(base: String): String = synchronized(lock) {
         val list = segments.toList()
         val first = list.firstOrNull()?.id ?: nextId
-        val target = max(3, (list.maxOfOrNull { it.durationSeconds } ?: 2.0).toInt() + 1)
         buildString {
-            append("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:$target\n")
-            append("#EXT-X-MEDIA-SEQUENCE:$first\n")
+            // Live playlist: sliding window, no ENDLIST, fixed TARGETDURATION.
+            append("#EXTM3U\n#EXT-X-VERSION:3\n")
+            append("#EXT-X-TARGETDURATION:").append(targetDurationSeconds).append("\n")
+            append("#EXT-X-MEDIA-SEQUENCE:").append(first).append("\n")
             for (seg in list) {
+                append("#EXT-X-PROGRAM-DATE-TIME:").append(Instant.ofEpochMilli(seg.startedAtMs)).append("\n")
                 append("#EXTINF:")
                 append(String.format(Locale.US, "%.3f", seg.durationSeconds))
                 append(",\n")
@@ -69,8 +75,8 @@ internal class LiveTsMuxer {
 
     private fun complete(duration: Double) {
         if (videoSamples > 0) {
-            segments.addLast(Segment(nextId++, duration, buffer.toByteArray()))
-            while (segments.size > 7) segments.removeFirst()
+            segments.addLast(Segment(nextId++, duration, buffer.toByteArray(), segmentStartWallMs))
+            while (segments.size > 6) segments.removeFirst()
         }
         buffer.reset()
         videoSamples = 0
