@@ -162,6 +162,9 @@ class BrowserMirrorService : Service() {
         streamStatus = "Vídeo H.264: " + width + "×" + height + " / alvo " + fps + " FPS"
         videoThread = Thread({
             val info = MediaCodec.BufferInfo()
+            // MediaCodec implementations may report surface timestamps in different epochs.
+            // Anchor video frames to the same monotonic clock used by AudioRecord.
+            var videoEpochOffsetUs: Long? = null
             try {
                 while (!closing.get()) {
                     val index = codec.dequeueOutputBuffer(info, 15_000)
@@ -184,7 +187,11 @@ class BrowserMirrorService : Service() {
                                     source.position(info.offset)
                                     source.limit(info.offset + info.size)
                                     source.get(data)
-                                    mux.addVideo(data, info.presentationTimeUs,
+                                    if (videoEpochOffsetUs == null) {
+                                        videoEpochOffsetUs = System.nanoTime() / 1000L - info.presentationTimeUs
+                                    }
+                                    val synchronizedPtsUs = info.presentationTimeUs + (videoEpochOffsetUs ?: 0L)
+                                    mux.addVideo(data, synchronizedPtsUs,
                                         info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0)
                                 }
                             }
