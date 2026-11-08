@@ -1,0 +1,54 @@
+name: Publicar APK para download direto
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-apk.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Nome da versão (ex.: v0.6)"
+        required: true
+        default: "v0.5"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Instalar Android SDK
+        run: |
+          SDKMANAGER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -type f -path '*/bin/sdkmanager' | head -n 1)
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Testar e gerar APK
+        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
+      - name: Preparar arquivo público
+        run: cp app/build/outputs/apk/debug/app-debug.apk Espelho-${{ inputs.version || 'v0.5' }}.apk
+      - name: Publicar no GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version || 'v0.5' }}
+        run: |
+          ASSET="Espelho-${VERSION}.apk"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" "$ASSET" --clobber
+          else
+            gh release create "$VERSION" "$ASSET" \
+              --target "$GITHUB_SHA" \
+              --title "Espelho $VERSION" \
+              --notes "APK de teste Android, sem anúncios. Compilado no GitHub Actions e verificado com os testes automatizados. A reprodução em Smart TVs pode variar conforme o modelo." \
+              --latest
+          fi
